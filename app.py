@@ -4,18 +4,17 @@ from datetime import datetime
 import plotly.express as px
 
 st.set_page_config(page_title="AI Project Intelligence Dashboard", layout="wide")
-
 st.title("🚀 AI Project Intelligence Dashboard")
 
-# Sidebar
+# ---------------- SIDEBAR ----------------
 st.sidebar.title("📂 Controls")
 uploaded_file = st.sidebar.file_uploader("Upload File", type=["xlsx", "csv"])
 
+# ---------------- LOAD FILE ----------------
 if uploaded_file is None:
     st.warning("Upload a project file to begin")
     st.stop()
 
-# File loading
 file_type = uploaded_file.name.split(".")[-1]
 df = pd.read_csv(uploaded_file) if file_type == "csv" else pd.read_excel(uploaded_file)
 
@@ -25,7 +24,6 @@ if not all(col in df.columns for col in required_cols):
     st.error("Missing required columns")
     st.stop()
 
-# Data prep
 df = df.dropna(subset=required_cols)
 
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
@@ -36,7 +34,7 @@ today = datetime.today()
 df["Is_Delayed"] = (df["End_Date"] < today) & (df["Status"] != "Completed")
 df["Days_Remaining"] = (df["End_Date"] - today).dt.days
 
-# Risk
+# ---------------- RISK ----------------
 def risk(row):
     if row["Is_Delayed"]:
         return "High"
@@ -46,20 +44,99 @@ def risk(row):
 
 df["Risk"] = df.apply(risk, axis=1)
 
-# Scrum detection
+# ---------------- SCRUM DETECTION ----------------
 is_scrum = "Sprint" in df.columns and "Story_Points" in df.columns
 
-if is_scrum:
-    st.success("Scrum project detected 🟢")
-else:
-    st.info("Traditional project detected 🔵")
+# ---------------- ADD WORK ITEM ----------------
+st.sidebar.divider()
+st.sidebar.subheader("➕ Add Work Item")
 
-# Metrics
+with st.sidebar.form("work_item_form"):
+
+    project_name = st.text_input("Project Name *")
+    work_type = st.selectbox("Work Item Type *", ["Task", "Issue", "Risk", "Change Request"])
+    priority = st.selectbox("Priority *", ["Low", "Medium", "High", "Critical"])
+    owner = st.text_input("Owner *")
+    due_date = st.date_input("Due Date *")
+
+    if work_type == "Issue":
+        template = """Summary:
+Steps to Reproduce:
+Expected Result:
+Actual Result:
+Business Impact:"""
+    elif work_type == "Change Request":
+        template = """Summary:
+Business Context:
+Change Details:
+Approval Required:
+Rollback Plan:"""
+    else:
+        template = """Summary:
+Business Context:
+Details:
+Acceptance Criteria:
+Dependencies:
+Risks:"""
+
+    description = st.text_area("Description *", value=template, height=200)
+
+    submitted = st.form_submit_button("Submit")
+
+    if submitted:
+        errors = []
+
+        if not project_name:
+            errors.append("Project Name is required")
+        if not owner:
+            errors.append("Owner is required")
+        if not description.strip():
+            errors.append("Description cannot be empty")
+
+        required_sections = ["Summary"]
+
+        if work_type == "Issue":
+            required_sections += ["Steps to Reproduce", "Expected Result"]
+        else:
+            required_sections += ["Business Context", "Acceptance Criteria"]
+
+        for section in required_sections:
+            if section not in description or description.split(section + ":")[-1].strip() == "":
+                errors.append(f"{section} section is incomplete")
+
+        if errors:
+            for e in errors:
+                st.sidebar.error(e)
+        else:
+            st.sidebar.success("✅ Work item added")
+
+            if "work_items" not in st.session_state:
+                st.session_state.work_items = []
+
+            st.session_state.work_items.append({
+                "Task_ID": f"NEW-{len(st.session_state.work_items)+1}",
+                "Task_Name": project_name,
+                "Start_Date": datetime.today(),
+                "End_Date": due_date,
+                "Status": "Not Started",
+                "%_Complete": 0,
+                "Owner": owner,
+                "Priority": priority,
+                "Type": work_type,
+                "Description": description
+            })
+
+# ---------------- MERGE DATA ----------------
+if "work_items" in st.session_state:
+    new_df = pd.DataFrame(st.session_state.work_items)
+    df = pd.concat([df, new_df], ignore_index=True)
+
+# ---------------- METRICS ----------------
 total_tasks = len(df)
 delayed_tasks = df["Is_Delayed"].sum()
 completion = df["%_Complete"].mean()
 
-# Tabs
+# ---------------- TABS ----------------
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Chat", "📁 Data"])
 
 # ---------------- DASHBOARD ----------------
@@ -82,23 +159,7 @@ with tab1:
     with col2:
         st.bar_chart(df["Status"].value_counts())
 
-    # Scrum dashboard
-    if is_scrum:
-        st.subheader("🏃 Scrum Dashboard")
-
-        velocity = df.groupby("Sprint")["Story_Points"].sum()
-        st.bar_chart(velocity)
-
-        sprint_filter = st.selectbox("Select Sprint", df["Sprint"].unique())
-        sprint_df = df[df["Sprint"] == sprint_filter]
-
-        total_points = sprint_df["Story_Points"].sum()
-        completed_points = sprint_df[sprint_df["Status"] == "Completed"]["Story_Points"].sum()
-
-        progress = (completed_points / total_points) * 100 if total_points > 0 else 0
-        st.metric("Sprint Completion %", round(progress, 2))
-
-# ---------------- GANTT CHART ----------------
+# ---------------- TIMELINE ----------------
 with tab2:
     st.subheader("📅 Project Timeline")
 
@@ -113,61 +174,33 @@ with tab2:
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- AI CHAT + SMART FEATURES ----------------
-with tab3:
-    st.subheader("🤖 AI Assistant")
-
-    if "chat" not in st.session_state:
-        st.session_state.chat = []
-
-    user_input = st.text_input("Ask something (risk, delay, sprint, recommend)")
-
-    if user_input:
-        st.session_state.chat.append(("User", user_input))
-        q = user_input.lower()
-
-        # Basic responses
-        if "risk" in q:
-            response = f"{len(df[df['Risk']=='High'])} high-risk tasks."
-
-        elif "delay" in q:
-            response = f"{len(df[df['Is_Delayed']])} tasks are delayed."
-
-        elif "summary" in q:
-            response = f"""
-            Total Tasks: {total_tasks}
-            Delayed Tasks: {delayed_tasks}
-            Completion: {round(completion,2)}%
-            """
-
-        # Scrum-specific
-        elif "velocity" in q and is_scrum:
-            avg_velocity = df.groupby("Sprint")["Story_Points"].sum().mean()
-            response = f"Average sprint velocity is {round(avg_velocity,2)}"
-
-        # Smart recommendations
-        elif "recommend" in q:
-            response = "Recommendations:\n"
-            if delayed_tasks > 0:
-                response += "- Fix delayed tasks immediately\n"
-            if completion < 50:
-                response += "- Improve execution speed\n"
-            if delayed_tasks > total_tasks * 0.3:
-                response += "- Re-plan timeline\n"
-
-        # Sprint planning assistant
-        elif "plan" in q and is_scrum:
-            next_sprint_capacity = df["Story_Points"].mean() * 5
-            response = f"Suggested sprint capacity: {round(next_sprint_capacity)} story points."
-
-        else:
-            response = "Try asking about risk, delay, summary, velocity or planning."
-
-        st.session_state.chat.append(("Bot", response))
-
-    for role, msg in st.session_state.chat:
-        st.markdown(f"**{'🧑 You' if role=='User' else '🤖 Bot'}:** {msg}")
-
-# ---------------- DATA ----------------
+# ---------------- EXPORT ----------------
 with tab4:
+    st.subheader("📁 Data")
+
     st.dataframe(df)
+
+    # Excel Export
+    excel_data = df.to_excel(index=False, engine='openpyxl')
+    st.download_button(
+        label="⬇️ Download Excel",
+        data=df.to_csv(index=False),
+        file_name="project_data.csv",
+        mime="text/csv"
+    )
+
+    # Jira Format
+    jira_df = df.rename(columns={
+        "Task_Name": "Summary",
+        "Description": "Description",
+        "Owner": "Assignee",
+        "Priority": "Priority",
+        "Type": "Issue Type"
+    })
+
+    st.download_button(
+        label="⬇️ Download Jira CSV",
+        data=jira_df.to_csv(index=False),
+        file_name="jira_import.csv",
+        mime="text/csv"
+    )
