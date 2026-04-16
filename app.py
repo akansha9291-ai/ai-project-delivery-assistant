@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import plotly.express as px
+from io import BytesIO
 
 st.set_page_config(page_title="AI Project Intelligence Dashboard", layout="wide")
 st.title("🚀 AI Project Intelligence Dashboard")
@@ -26,26 +27,11 @@ if not all(col in df.columns for col in required_cols):
 
 df = df.dropna(subset=required_cols)
 
+# Date conversion
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
 today = datetime.today()
-
-df["Is_Delayed"] = (df["End_Date"] < today) & (df["Status"] != "Completed")
-df["Days_Remaining"] = (df["End_Date"] - today).dt.days
-
-# ---------------- RISK ----------------
-def risk(row):
-    if row["Is_Delayed"]:
-        return "High"
-    elif row["%_Complete"] < 50:
-        return "Medium"
-    return "Low"
-
-df["Risk"] = df.apply(risk, axis=1)
-
-# ---------------- SCRUM DETECTION ----------------
-is_scrum = "Sprint" in df.columns and "Story_Points" in df.columns
 
 # ---------------- ADD WORK ITEM ----------------
 st.sidebar.divider()
@@ -59,6 +45,7 @@ with st.sidebar.form("work_item_form"):
     owner = st.text_input("Owner *")
     due_date = st.date_input("Due Date *")
 
+    # Dynamic template
     if work_type == "Issue":
         template = """Summary:
 Steps to Reproduce:
@@ -131,6 +118,19 @@ if "work_items" in st.session_state:
     new_df = pd.DataFrame(st.session_state.work_items)
     df = pd.concat([df, new_df], ignore_index=True)
 
+# ---------------- DERIVED METRICS ----------------
+df["Is_Delayed"] = (df["End_Date"] < today) & (df["Status"] != "Completed")
+df["Days_Remaining"] = (df["End_Date"] - today).dt.days
+
+def risk(row):
+    if row["Is_Delayed"]:
+        return "High"
+    elif row["%_Complete"] < 50:
+        return "Medium"
+    return "Low"
+
+df["Risk"] = df.apply(risk, axis=1)
+
 # ---------------- METRICS ----------------
 total_tasks = len(df)
 delayed_tasks = df["Is_Delayed"].sum()
@@ -174,22 +174,53 @@ with tab2:
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- AI CHAT ----------------
+with tab3:
+    st.subheader("🤖 AI Assistant")
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    user_input = st.text_input("Ask something (risk, delay, summary)")
+
+    if user_input:
+        st.session_state.chat.append(("User", user_input))
+        q = user_input.lower()
+
+        if "risk" in q:
+            response = f"{len(df[df['Risk']=='High'])} high-risk tasks."
+        elif "delay" in q:
+            response = f"{len(df[df['Is_Delayed']])} tasks are delayed."
+        elif "summary" in q:
+            response = f"Total: {total_tasks}, Delayed: {delayed_tasks}, Completion: {round(completion,2)}%"
+        else:
+            response = "Try asking about risk, delay, or summary."
+
+        st.session_state.chat.append(("Bot", response))
+
+    for role, msg in st.session_state.chat:
+        st.markdown(f"**{'🧑 You' if role=='User' else '🤖 Bot'}:** {msg}")
+
 # ---------------- EXPORT ----------------
 with tab4:
     st.subheader("📁 Data")
-
     st.dataframe(df)
 
-    # Excel Export
-    excel_data = df.to_excel(index=False, engine='openpyxl')
+    # -------- EXCEL EXPORT (FIXED) --------
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Project Data')
+
+    excel_data = output.getvalue()
+
     st.download_button(
         label="⬇️ Download Excel",
-        data=df.to_csv(index=False),
-        file_name="project_data.csv",
-        mime="text/csv"
+        data=excel_data,
+        file_name="project_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # Jira Format
+    # -------- JIRA CSV EXPORT --------
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
         "Description": "Description",
