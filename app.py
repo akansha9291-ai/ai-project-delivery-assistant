@@ -31,7 +31,7 @@ df = df.dropna(subset=required_cols)
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
-# ---------------- PROJECT TYPE DETECTION ----------------
+# ---------------- PROJECT TYPE ----------------
 is_scrum = "Sprint" in df.columns and "Story_Points" in df.columns
 
 # ---------------- ADD WORK ITEM ----------------
@@ -118,7 +118,7 @@ if "work_items" in st.session_state:
     new_df = pd.DataFrame(st.session_state.work_items)
     df = pd.concat([df, new_df], ignore_index=True)
 
-# Fix dates again (important)
+# Fix date types again
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
@@ -148,7 +148,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Ch
 with tab1:
     st.subheader("📊 Overview")
 
-    # PROJECT TYPE DISPLAY
     if is_scrum:
         st.success("🟢 Scrum Project Detected")
     else:
@@ -170,7 +169,7 @@ with tab1:
     with col2:
         st.bar_chart(df["Status"].value_counts())
 
-    # ---------------- SCRUM DASHBOARD ----------------
+    # Scrum dashboard
     if is_scrum:
         st.subheader("🏃 Scrum Dashboard")
 
@@ -201,12 +200,55 @@ with tab2:
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
+# ---------------- AI CHAT ----------------
+with tab3:
+    st.subheader("🤖 AI Assistant")
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input("Ask something (risk, delay, summary, recommend)")
+        submitted = st.form_submit_button("Ask")
+
+    if submitted:
+        if user_input.strip() == "":
+            st.warning("Please enter a question")
+        else:
+            st.session_state.chat.append(("User", user_input))
+            q = user_input.lower()
+
+            if "risk" in q:
+                response = f"{len(df[df['Risk']=='High'])} high-risk tasks."
+
+            elif "delay" in q:
+                response = f"{len(df[df['Is_Delayed']])} tasks are delayed."
+
+            elif "summary" in q:
+                response = f"Total: {total_tasks}, Delayed: {delayed_tasks}, Completion: {round(completion,2)}%"
+
+            elif "recommend" in q:
+                response = "Recommendations:\n"
+                if delayed_tasks > 0:
+                    response += "- Fix delayed tasks\n"
+                if completion < 50:
+                    response += "- Improve execution speed\n"
+
+            else:
+                response = "Try asking about risk, delay, summary, or recommend."
+
+            st.session_state.chat.append(("Bot", response))
+
+    st.divider()
+    for role, msg in st.session_state.chat:
+        st.markdown(f"**{'🧑 You' if role=='User' else '🤖 Bot'}:** {msg}")
+
 # ---------------- EXPORT ----------------
 with tab4:
     st.subheader("📁 Data")
     st.dataframe(df)
 
-    # Excel Export
+    # Excel export
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
@@ -214,10 +256,11 @@ with tab4:
     st.download_button(
         "⬇️ Download Excel",
         data=output.getvalue(),
-        file_name="project_data.xlsx"
+        file_name="project_data.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # Jira Export
+    # Jira export
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
         "Description": "Description",
@@ -229,5 +272,6 @@ with tab4:
     st.download_button(
         "⬇️ Download Jira CSV",
         data=jira_df.to_csv(index=False),
-        file_name="jira_import.csv"
+        file_name="jira_import.csv",
+        mime="text/csv"
     )
