@@ -27,11 +27,9 @@ if not all(col in df.columns for col in required_cols):
 
 df = df.dropna(subset=required_cols)
 
-# Date conversion
+# Initial date conversion
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
-
-today = datetime.today()
 
 # ---------------- ADD WORK ITEM ----------------
 st.sidebar.divider()
@@ -103,8 +101,8 @@ Risks:"""
             st.session_state.work_items.append({
                 "Task_ID": f"NEW-{len(st.session_state.work_items)+1}",
                 "Task_Name": project_name,
-                "Start_Date": datetime.today(),
-                "End_Date": due_date,
+                "Start_Date": pd.to_datetime(datetime.today()),
+                "End_Date": pd.to_datetime(due_date),  # FIXED
                 "Status": "Not Started",
                 "%_Complete": 0,
                 "Owner": owner,
@@ -117,6 +115,14 @@ Risks:"""
 if "work_items" in st.session_state:
     new_df = pd.DataFrame(st.session_state.work_items)
     df = pd.concat([df, new_df], ignore_index=True)
+
+# ---------------- FIX DATE TYPES (CRITICAL FIX) ----------------
+df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
+df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
+
+df = df.dropna(subset=["End_Date"])  # safety
+
+today = pd.to_datetime(datetime.today())
 
 # ---------------- DERIVED METRICS ----------------
 df["Is_Delayed"] = (df["End_Date"] < today) & (df["Status"] != "Completed")
@@ -206,21 +212,19 @@ with tab4:
     st.subheader("📁 Data")
     st.dataframe(df)
 
-    # -------- EXCEL EXPORT (FIXED) --------
+    # Excel Export
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Project Data')
-
-    excel_data = output.getvalue()
+        df.to_excel(writer, index=False)
 
     st.download_button(
         label="⬇️ Download Excel",
-        data=excel_data,
+        data=output.getvalue(),
         file_name="project_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # -------- JIRA CSV EXPORT --------
+    # Jira CSV Export
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
         "Description": "Description",
