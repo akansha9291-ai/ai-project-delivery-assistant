@@ -27,9 +27,12 @@ if not all(col in df.columns for col in required_cols):
 
 df = df.dropna(subset=required_cols)
 
-# Initial date conversion
+# Convert dates
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
+
+# ---------------- PROJECT TYPE DETECTION ----------------
+is_scrum = "Sprint" in df.columns and "Story_Points" in df.columns
 
 # ---------------- ADD WORK ITEM ----------------
 st.sidebar.divider()
@@ -43,7 +46,6 @@ with st.sidebar.form("work_item_form"):
     owner = st.text_input("Owner *")
     due_date = st.date_input("Due Date *")
 
-    # Dynamic template
     if work_type == "Issue":
         template = """Summary:
 Steps to Reproduce:
@@ -102,7 +104,7 @@ Risks:"""
                 "Task_ID": f"NEW-{len(st.session_state.work_items)+1}",
                 "Task_Name": project_name,
                 "Start_Date": pd.to_datetime(datetime.today()),
-                "End_Date": pd.to_datetime(due_date),  # FIXED
+                "End_Date": pd.to_datetime(due_date),
                 "Status": "Not Started",
                 "%_Complete": 0,
                 "Owner": owner,
@@ -111,20 +113,18 @@ Risks:"""
                 "Description": description
             })
 
-# ---------------- MERGE DATA ----------------
+# ---------------- MERGE ----------------
 if "work_items" in st.session_state:
     new_df = pd.DataFrame(st.session_state.work_items)
     df = pd.concat([df, new_df], ignore_index=True)
 
-# ---------------- FIX DATE TYPES (CRITICAL FIX) ----------------
+# Fix dates again (important)
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
-df = df.dropna(subset=["End_Date"])  # safety
-
 today = pd.to_datetime(datetime.today())
 
-# ---------------- DERIVED METRICS ----------------
+# ---------------- METRICS ----------------
 df["Is_Delayed"] = (df["End_Date"] < today) & (df["Status"] != "Completed")
 df["Days_Remaining"] = (df["End_Date"] - today).dt.days
 
@@ -137,7 +137,6 @@ def risk(row):
 
 df["Risk"] = df.apply(risk, axis=1)
 
-# ---------------- METRICS ----------------
 total_tasks = len(df)
 delayed_tasks = df["Is_Delayed"].sum()
 completion = df["%_Complete"].mean()
@@ -148,6 +147,12 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Ch
 # ---------------- DASHBOARD ----------------
 with tab1:
     st.subheader("📊 Overview")
+
+    # PROJECT TYPE DISPLAY
+    if is_scrum:
+        st.success("🟢 Scrum Project Detected")
+    else:
+        st.info("🔵 Traditional Project Detected")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Tasks", total_tasks)
@@ -165,6 +170,22 @@ with tab1:
     with col2:
         st.bar_chart(df["Status"].value_counts())
 
+    # ---------------- SCRUM DASHBOARD ----------------
+    if is_scrum:
+        st.subheader("🏃 Scrum Dashboard")
+
+        velocity = df.groupby("Sprint")["Story_Points"].sum()
+        st.bar_chart(velocity)
+
+        sprint_filter = st.selectbox("Select Sprint", df["Sprint"].dropna().unique())
+        sprint_df = df[df["Sprint"] == sprint_filter]
+
+        total_points = sprint_df["Story_Points"].sum()
+        completed_points = sprint_df[sprint_df["Status"] == "Completed"]["Story_Points"].sum()
+
+        progress = (completed_points / total_points) * 100 if total_points > 0 else 0
+        st.metric("Sprint Completion %", round(progress, 2))
+
 # ---------------- TIMELINE ----------------
 with tab2:
     st.subheader("📅 Project Timeline")
@@ -180,33 +201,6 @@ with tab2:
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- AI CHAT ----------------
-with tab3:
-    st.subheader("🤖 AI Assistant")
-
-    if "chat" not in st.session_state:
-        st.session_state.chat = []
-
-    user_input = st.text_input("Ask something (risk, delay, summary)")
-
-    if user_input:
-        st.session_state.chat.append(("User", user_input))
-        q = user_input.lower()
-
-        if "risk" in q:
-            response = f"{len(df[df['Risk']=='High'])} high-risk tasks."
-        elif "delay" in q:
-            response = f"{len(df[df['Is_Delayed']])} tasks are delayed."
-        elif "summary" in q:
-            response = f"Total: {total_tasks}, Delayed: {delayed_tasks}, Completion: {round(completion,2)}%"
-        else:
-            response = "Try asking about risk, delay, or summary."
-
-        st.session_state.chat.append(("Bot", response))
-
-    for role, msg in st.session_state.chat:
-        st.markdown(f"**{'🧑 You' if role=='User' else '🤖 Bot'}:** {msg}")
-
 # ---------------- EXPORT ----------------
 with tab4:
     st.subheader("📁 Data")
@@ -218,13 +212,12 @@ with tab4:
         df.to_excel(writer, index=False)
 
     st.download_button(
-        label="⬇️ Download Excel",
+        "⬇️ Download Excel",
         data=output.getvalue(),
-        file_name="project_data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        file_name="project_data.xlsx"
     )
 
-    # Jira CSV Export
+    # Jira Export
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
         "Description": "Description",
@@ -234,8 +227,7 @@ with tab4:
     })
 
     st.download_button(
-        label="⬇️ Download Jira CSV",
+        "⬇️ Download Jira CSV",
         data=jira_df.to_csv(index=False),
-        file_name="jira_import.csv",
-        mime="text/csv"
+        file_name="jira_import.csv"
     )
