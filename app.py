@@ -169,22 +169,6 @@ with tab1:
     with col2:
         st.bar_chart(df["Status"].value_counts())
 
-    # Scrum dashboard
-    if is_scrum:
-        st.subheader("🏃 Scrum Dashboard")
-
-        velocity = df.groupby("Sprint")["Story_Points"].sum()
-        st.bar_chart(velocity)
-
-        sprint_filter = st.selectbox("Select Sprint", df["Sprint"].dropna().unique())
-        sprint_df = df[df["Sprint"] == sprint_filter]
-
-        total_points = sprint_df["Story_Points"].sum()
-        completed_points = sprint_df[sprint_df["Status"] == "Completed"]["Story_Points"].sum()
-
-        progress = (completed_points / total_points) * 100 if total_points > 0 else 0
-        st.metric("Sprint Completion %", round(progress, 2))
-
 # ---------------- TIMELINE ----------------
 with tab2:
     st.subheader("📅 Project Timeline")
@@ -200,44 +184,72 @@ with tab2:
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- AI CHAT ----------------
+# ---------------- AI CHAT (SMART) ----------------
 with tab3:
-    st.subheader("🤖 AI Assistant")
+    st.subheader("🤖 AI Assistant (Smart Analysis)")
 
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
     with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input("Ask something (risk, delay, summary, recommend)")
+        user_input = st.text_input("Ask about tasks, owners, risks, delays...")
         submitted = st.form_submit_button("Ask")
 
     if submitted:
-        if user_input.strip() == "":
-            st.warning("Please enter a question")
-        else:
-            st.session_state.chat.append(("User", user_input))
-            q = user_input.lower()
+        st.session_state.chat.append(("User", user_input))
+        q = user_input.lower()
+        response = ""
 
-            if "risk" in q:
-                response = f"{len(df[df['Risk']=='High'])} high-risk tasks."
+        # OWNER ANALYSIS
+        if "Owner" in df.columns:
+            owners = df["Owner"].dropna().unique()
+            matched_owner = next((o for o in owners if str(o).lower() in q), None)
 
-            elif "delay" in q:
-                response = f"{len(df[df['Is_Delayed']])} tasks are delayed."
+            if matched_owner:
+                owner_df = df[df["Owner"] == matched_owner]
+                response = f"""
+👤 Owner: {matched_owner}
 
-            elif "summary" in q:
-                response = f"Total: {total_tasks}, Delayed: {delayed_tasks}, Completion: {round(completion,2)}%"
+Total Tasks: {len(owner_df)}
+Delayed: {owner_df['Is_Delayed'].sum()}
+High Risk: {len(owner_df[owner_df['Risk']=='High'])}
+Completion: {round(owner_df['%_Complete'].mean(),2)}%
+"""
+        
+        # DELAY
+        elif "delay" in q:
+            delayed_df = df[df["Is_Delayed"]]
+            response = f"{len(delayed_df)} delayed tasks:\n" + "\n".join(delayed_df["Task_Name"].head(5))
 
-            elif "recommend" in q:
-                response = "Recommendations:\n"
-                if delayed_tasks > 0:
-                    response += "- Fix delayed tasks\n"
-                if completion < 50:
-                    response += "- Improve execution speed\n"
+        # RISK
+        elif "risk" in q:
+            high_risk_df = df[df["Risk"] == "High"]
+            response = f"{len(high_risk_df)} high-risk tasks:\n" + "\n".join(high_risk_df["Task_Name"].head(5))
 
-            else:
-                response = "Try asking about risk, delay, summary, or recommend."
+        # SUMMARY
+        elif "summary" in q:
+            response = f"""
+Total Tasks: {len(df)}
+Delayed: {delayed_tasks}
+High Risk: {len(df[df['Risk']=='High'])}
+Completion: {round(completion,2)}%
+"""
 
-            st.session_state.chat.append(("Bot", response))
+        # UPCOMING
+        elif "due" in q or "upcoming" in q:
+            upcoming = df[df["Days_Remaining"] <= 7]
+            response = f"{len(upcoming)} tasks due soon:\n" + "\n".join(upcoming["Task_Name"].head(5))
+
+        # DEFAULT
+        if response == "":
+            response = """Try:
+- tasks for [owner]
+- delayed tasks
+- high risk tasks
+- summary
+- upcoming tasks"""
+
+        st.session_state.chat.append(("Bot", response))
 
     st.divider()
     for role, msg in st.session_state.chat:
@@ -248,19 +260,12 @@ with tab4:
     st.subheader("📁 Data")
     st.dataframe(df)
 
-    # Excel export
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
 
-    st.download_button(
-        "⬇️ Download Excel",
-        data=output.getvalue(),
-        file_name="project_data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.download_button("⬇️ Download Excel", data=output.getvalue(), file_name="project_data.xlsx")
 
-    # Jira export
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
         "Description": "Description",
@@ -269,9 +274,4 @@ with tab4:
         "Type": "Issue Type"
     })
 
-    st.download_button(
-        "⬇️ Download Jira CSV",
-        data=jira_df.to_csv(index=False),
-        file_name="jira_import.csv",
-        mime="text/csv"
-    )
+    st.download_button("⬇️ Download Jira CSV", data=jira_df.to_csv(index=False), file_name="jira_import.csv")
