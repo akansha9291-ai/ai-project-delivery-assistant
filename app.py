@@ -25,7 +25,8 @@ if not all(col in df.columns for col in required_cols):
     st.error("Missing required columns")
     st.stop()
 
-df = df.dropna(subset=required_cols)
+# Less aggressive cleaning
+df = df.dropna(subset=["Task_ID", "Task_Name"])
 
 # Convert dates
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
@@ -40,19 +41,9 @@ st.sidebar.subheader("➕ Add Work Item")
 
 with st.sidebar.form("work_item_form"):
     project_name = st.text_input("Project Name *")
-    work_type = st.selectbox("Work Item Type *", ["Task", "Issue", "Risk", "Change Request"])
-    priority = st.selectbox("Priority *", ["Low", "Medium", "High", "Critical"])
     owner = st.text_input("Owner *")
     due_date = st.date_input("Due Date *")
 
-    template = """Summary:
-Business Context:
-Details:
-Acceptance Criteria:
-Dependencies:
-Risks:"""
-
-    description = st.text_area("Description *", value=template, height=200)
     submitted = st.form_submit_button("Submit")
 
     if submitted:
@@ -67,10 +58,7 @@ Risks:"""
                 "End_Date": pd.to_datetime(due_date),
                 "Status": "Not Started",
                 "%_Complete": 0,
-                "Owner": owner,
-                "Priority": priority,
-                "Type": work_type,
-                "Description": description
+                "Owner": owner
             })
             st.sidebar.success("✅ Added")
         else:
@@ -80,7 +68,7 @@ Risks:"""
 if "work_items" in st.session_state:
     df = pd.concat([df, pd.DataFrame(st.session_state.work_items)], ignore_index=True)
 
-# Fix dates
+# Fix date types again
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
@@ -110,7 +98,11 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Ch
 with tab1:
     st.subheader("📊 Overview")
 
-    st.success("🟢 Scrum Project") if is_scrum else st.info("🔵 Traditional Project")
+    # FIXED UI BUG HERE
+    if is_scrum:
+        st.success("🟢 Scrum Project")
+    else:
+        st.info("🔵 Traditional Project")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Tasks", total_tasks)
@@ -120,45 +112,48 @@ with tab1:
 
     st.divider()
 
-    # -------- ADVANCED CHART BUILDER --------
-    st.subheader("📊 Custom Analytics")
+    # -------- RAW vs AGGREGATED --------
+    view_mode = st.radio("View Mode", ["Aggregated", "Raw Data"], horizontal=True)
 
-    col1, col2, col3 = st.columns(3)
+    if view_mode == "Raw Data":
+        st.dataframe(df)
 
-    x_axis = col1.selectbox("X-axis", df.columns)
-    numeric_cols = df.select_dtypes(include='number').columns
-    y_axis = col2.selectbox("Y-axis", numeric_cols)
-    agg = col3.selectbox("Aggregation", ["sum", "mean", "count"])
-
-    chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie"])
-    scale = st.radio("Scale", ["Linear", "Log"], horizontal=True)
-
-    # Data prep
-    if agg == "count":
-        chart_df = df.groupby(x_axis).size().reset_index(name="Count")
-        y_plot = "Count"
     else:
-        chart_df = df.groupby(x_axis)[y_axis].agg(agg).reset_index()
-        y_plot = y_axis
+        st.subheader("📊 Custom Analytics")
 
-    # Chart selection
-    if chart_type == "Bar":
-        fig = px.bar(chart_df, x=x_axis, y=y_plot)
+        col1, col2, col3 = st.columns(3)
 
-    elif chart_type == "Line":
-        fig = px.line(chart_df, x=x_axis, y=y_plot)
+        x_axis = col1.selectbox("X-axis", df.columns)
+        numeric_cols = df.select_dtypes(include='number').columns
+        y_axis = col2.selectbox("Y-axis", numeric_cols)
+        agg = col3.selectbox("Aggregation", ["sum", "mean", "count"])
 
-    elif chart_type == "Scatter":
-        fig = px.scatter(chart_df, x=x_axis, y=y_plot)
+        chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie"])
+        scale = st.radio("Scale", ["Linear", "Log"], horizontal=True)
 
-    elif chart_type == "Pie":
-        fig = px.pie(chart_df, names=x_axis, values=y_plot)
+        if agg == "count":
+            chart_df = df.groupby(x_axis).size().reset_index(name="Count")
+            y_plot = "Count"
+        else:
+            chart_df = df.groupby(x_axis)[y_axis].agg(agg).reset_index()
+            y_plot = y_axis
 
-    # Apply scale
-    if scale == "Log" and chart_type != "Pie":
-        fig.update_yaxes(type="log")
+        if chart_type == "Bar":
+            fig = px.bar(chart_df, x=x_axis, y=y_plot)
 
-    st.plotly_chart(fig, use_container_width=True)
+        elif chart_type == "Line":
+            fig = px.line(chart_df, x=x_axis, y=y_plot)
+
+        elif chart_type == "Scatter":
+            fig = px.scatter(chart_df, x=x_axis, y=y_plot)
+
+        elif chart_type == "Pie":
+            fig = px.pie(chart_df, names=x_axis, values=y_plot)
+
+        if scale == "Log" and chart_type != "Pie":
+            fig.update_yaxes(type="log")
+
+        st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- TIMELINE ----------------
 with tab2:
@@ -168,22 +163,20 @@ with tab2:
 
 # ---------------- AI CHAT ----------------
 with tab3:
-    st.subheader("🤖 AI Assistant")
+    st.subheader("🤖 AI Assistant (Smart Analysis)")
 
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
     with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input("Ask about tasks, owners, risks...")
+        user_input = st.text_input("Ask about tasks, owners, risks, delays...")
         submitted = st.form_submit_button("Ask")
 
     if submitted:
         st.session_state.chat.append(("User", user_input))
         q = user_input.lower()
-
         response = ""
 
-        # Owner-based
         if "Owner" in df.columns:
             owners = df["Owner"].dropna().unique()
             match = next((o for o in owners if str(o).lower() in q), None)
@@ -217,12 +210,11 @@ with tab4:
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
 
-    st.download_button("⬇️ Excel", data=output.getvalue(), file_name="data.xlsx")
+    st.download_button("⬇️ Download Excel", data=output.getvalue(), file_name="project_data.xlsx")
 
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
-        "Owner": "Assignee",
-        "Type": "Issue Type"
+        "Owner": "Assignee"
     })
 
-    st.download_button("⬇️ Jira CSV", data=jira_df.to_csv(index=False), file_name="jira.csv")
+    st.download_button("⬇️ Download Jira CSV", data=jira_df.to_csv(index=False), file_name="jira_import.csv")
