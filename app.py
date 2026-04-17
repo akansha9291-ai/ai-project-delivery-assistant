@@ -39,27 +39,13 @@ st.sidebar.divider()
 st.sidebar.subheader("➕ Add Work Item")
 
 with st.sidebar.form("work_item_form"):
-
     project_name = st.text_input("Project Name *")
     work_type = st.selectbox("Work Item Type *", ["Task", "Issue", "Risk", "Change Request"])
     priority = st.selectbox("Priority *", ["Low", "Medium", "High", "Critical"])
     owner = st.text_input("Owner *")
     due_date = st.date_input("Due Date *")
 
-    if work_type == "Issue":
-        template = """Summary:
-Steps to Reproduce:
-Expected Result:
-Actual Result:
-Business Impact:"""
-    elif work_type == "Change Request":
-        template = """Summary:
-Business Context:
-Change Details:
-Approval Required:
-Rollback Plan:"""
-    else:
-        template = """Summary:
+    template = """Summary:
 Business Context:
 Details:
 Acceptance Criteria:
@@ -67,36 +53,10 @@ Dependencies:
 Risks:"""
 
     description = st.text_area("Description *", value=template, height=200)
-
     submitted = st.form_submit_button("Submit")
 
     if submitted:
-        errors = []
-
-        if not project_name:
-            errors.append("Project Name is required")
-        if not owner:
-            errors.append("Owner is required")
-        if not description.strip():
-            errors.append("Description cannot be empty")
-
-        required_sections = ["Summary"]
-
-        if work_type == "Issue":
-            required_sections += ["Steps to Reproduce", "Expected Result"]
-        else:
-            required_sections += ["Business Context", "Acceptance Criteria"]
-
-        for section in required_sections:
-            if section not in description or description.split(section + ":")[-1].strip() == "":
-                errors.append(f"{section} section is incomplete")
-
-        if errors:
-            for e in errors:
-                st.sidebar.error(e)
-        else:
-            st.sidebar.success("✅ Work item added")
-
+        if project_name and owner:
             if "work_items" not in st.session_state:
                 st.session_state.work_items = []
 
@@ -112,13 +72,15 @@ Risks:"""
                 "Type": work_type,
                 "Description": description
             })
+            st.sidebar.success("✅ Added")
+        else:
+            st.sidebar.error("Fill required fields")
 
 # ---------------- MERGE ----------------
 if "work_items" in st.session_state:
-    new_df = pd.DataFrame(st.session_state.work_items)
-    df = pd.concat([df, new_df], ignore_index=True)
+    df = pd.concat([df, pd.DataFrame(st.session_state.work_items)], ignore_index=True)
 
-# Fix date types again
+# Fix dates
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
@@ -148,10 +110,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Ch
 with tab1:
     st.subheader("📊 Overview")
 
-    if is_scrum:
-        st.success("🟢 Scrum Project Detected")
-    else:
-        st.info("🔵 Traditional Project Detected")
+    st.success("🟢 Scrum Project") if is_scrum else st.info("🔵 Traditional Project")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Tasks", total_tasks)
@@ -161,117 +120,109 @@ with tab1:
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    # -------- ADVANCED CHART BUILDER --------
+    st.subheader("📊 Custom Analytics")
 
-    with col1:
-        st.bar_chart(df["%_Complete"])
+    col1, col2, col3 = st.columns(3)
 
-    with col2:
-        st.bar_chart(df["Status"].value_counts())
+    x_axis = col1.selectbox("X-axis", df.columns)
+    numeric_cols = df.select_dtypes(include='number').columns
+    y_axis = col2.selectbox("Y-axis", numeric_cols)
+    agg = col3.selectbox("Aggregation", ["sum", "mean", "count"])
+
+    chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie"])
+    scale = st.radio("Scale", ["Linear", "Log"], horizontal=True)
+
+    # Data prep
+    if agg == "count":
+        chart_df = df.groupby(x_axis).size().reset_index(name="Count")
+        y_plot = "Count"
+    else:
+        chart_df = df.groupby(x_axis)[y_axis].agg(agg).reset_index()
+        y_plot = y_axis
+
+    # Chart selection
+    if chart_type == "Bar":
+        fig = px.bar(chart_df, x=x_axis, y=y_plot)
+
+    elif chart_type == "Line":
+        fig = px.line(chart_df, x=x_axis, y=y_plot)
+
+    elif chart_type == "Scatter":
+        fig = px.scatter(chart_df, x=x_axis, y=y_plot)
+
+    elif chart_type == "Pie":
+        fig = px.pie(chart_df, names=x_axis, values=y_plot)
+
+    # Apply scale
+    if scale == "Log" and chart_type != "Pie":
+        fig.update_yaxes(type="log")
+
+    st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- TIMELINE ----------------
 with tab2:
-    st.subheader("📅 Project Timeline")
-
-    fig = px.timeline(
-        df,
-        x_start="Start_Date",
-        x_end="End_Date",
-        y="Task_Name",
-        color="Risk"
-    )
-
+    fig = px.timeline(df, x_start="Start_Date", x_end="End_Date", y="Task_Name", color="Risk")
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- AI CHAT (SMART) ----------------
+# ---------------- AI CHAT ----------------
 with tab3:
-    st.subheader("🤖 AI Assistant (Smart Analysis)")
+    st.subheader("🤖 AI Assistant")
 
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
     with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input("Ask about tasks, owners, risks, delays...")
+        user_input = st.text_input("Ask about tasks, owners, risks...")
         submitted = st.form_submit_button("Ask")
 
     if submitted:
         st.session_state.chat.append(("User", user_input))
         q = user_input.lower()
+
         response = ""
 
-        # OWNER ANALYSIS
+        # Owner-based
         if "Owner" in df.columns:
             owners = df["Owner"].dropna().unique()
-            matched_owner = next((o for o in owners if str(o).lower() in q), None)
+            match = next((o for o in owners if str(o).lower() in q), None)
 
-            if matched_owner:
-                owner_df = df[df["Owner"] == matched_owner]
-                response = f"""
-👤 Owner: {matched_owner}
+            if match:
+                temp = df[df["Owner"] == match]
+                response = f"{match}: {len(temp)} tasks, {temp['Is_Delayed'].sum()} delayed"
 
-Total Tasks: {len(owner_df)}
-Delayed: {owner_df['Is_Delayed'].sum()}
-High Risk: {len(owner_df[owner_df['Risk']=='High'])}
-Completion: {round(owner_df['%_Complete'].mean(),2)}%
-"""
-        
-        # DELAY
         elif "delay" in q:
-            delayed_df = df[df["Is_Delayed"]]
-            response = f"{len(delayed_df)} delayed tasks:\n" + "\n".join(delayed_df["Task_Name"].head(5))
+            response = f"{len(df[df['Is_Delayed']])} delayed tasks"
 
-        # RISK
         elif "risk" in q:
-            high_risk_df = df[df["Risk"] == "High"]
-            response = f"{len(high_risk_df)} high-risk tasks:\n" + "\n".join(high_risk_df["Task_Name"].head(5))
+            response = f"{len(df[df['Risk']=='High'])} high-risk tasks"
 
-        # SUMMARY
         elif "summary" in q:
-            response = f"""
-Total Tasks: {len(df)}
-Delayed: {delayed_tasks}
-High Risk: {len(df[df['Risk']=='High'])}
-Completion: {round(completion,2)}%
-"""
+            response = f"Total {len(df)}, Delayed {delayed_tasks}, Completion {round(completion,2)}%"
 
-        # UPCOMING
-        elif "due" in q or "upcoming" in q:
-            upcoming = df[df["Days_Remaining"] <= 7]
-            response = f"{len(upcoming)} tasks due soon:\n" + "\n".join(upcoming["Task_Name"].head(5))
-
-        # DEFAULT
         if response == "":
-            response = """Try:
-- tasks for [owner]
-- delayed tasks
-- high risk tasks
-- summary
-- upcoming tasks"""
+            response = "Try: tasks for [owner], delayed tasks, risk, summary"
 
         st.session_state.chat.append(("Bot", response))
 
-    st.divider()
     for role, msg in st.session_state.chat:
         st.markdown(f"**{'🧑 You' if role=='User' else '🤖 Bot'}:** {msg}")
 
 # ---------------- EXPORT ----------------
 with tab4:
-    st.subheader("📁 Data")
     st.dataframe(df)
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
 
-    st.download_button("⬇️ Download Excel", data=output.getvalue(), file_name="project_data.xlsx")
+    st.download_button("⬇️ Excel", data=output.getvalue(), file_name="data.xlsx")
 
     jira_df = df.rename(columns={
         "Task_Name": "Summary",
-        "Description": "Description",
         "Owner": "Assignee",
-        "Priority": "Priority",
         "Type": "Issue Type"
     })
 
-    st.download_button("⬇️ Download Jira CSV", data=jira_df.to_csv(index=False), file_name="jira_import.csv")
+    st.download_button("⬇️ Jira CSV", data=jira_df.to_csv(index=False), file_name="jira.csv")
