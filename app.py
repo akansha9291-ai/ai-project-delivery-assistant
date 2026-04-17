@@ -25,7 +25,6 @@ if not all(col in df.columns for col in required_cols):
     st.error("Missing required columns")
     st.stop()
 
-# Less aggressive cleaning
 df = df.dropna(subset=["Task_ID", "Task_Name"])
 
 # Convert dates
@@ -68,7 +67,7 @@ with st.sidebar.form("work_item_form"):
 if "work_items" in st.session_state:
     df = pd.concat([df, pd.DataFrame(st.session_state.work_items)], ignore_index=True)
 
-# Fix date types again
+# Fix date types
 df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce")
 df["End_Date"] = pd.to_datetime(df["End_Date"], errors="coerce")
 
@@ -98,7 +97,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "📅 Timeline", "🤖 AI Ch
 with tab1:
     st.subheader("📊 Overview")
 
-    # FIXED UI BUG HERE
     if is_scrum:
         st.success("🟢 Scrum Project")
     else:
@@ -112,7 +110,7 @@ with tab1:
 
     st.divider()
 
-    # -------- RAW vs AGGREGATED --------
+    # -------- VIEW MODE --------
     view_mode = st.radio("View Mode", ["Aggregated", "Raw Data"], horizontal=True)
 
     if view_mode == "Raw Data":
@@ -124,20 +122,32 @@ with tab1:
         col1, col2, col3 = st.columns(3)
 
         x_axis = col1.selectbox("X-axis", df.columns)
+
         numeric_cols = df.select_dtypes(include='number').columns
-        y_axis = col2.selectbox("Y-axis", numeric_cols)
+        y_options = [col for col in numeric_cols if col != x_axis]
+
+        if len(y_options) == 0:
+            st.warning("No valid Y-axis available")
+            st.stop()
+
+        y_axis = col2.selectbox("Y-axis", y_options)
         agg = col3.selectbox("Aggregation", ["sum", "mean", "count"])
 
         chart_type = st.selectbox("Chart Type", ["Bar", "Line", "Scatter", "Pie"])
         scale = st.radio("Scale", ["Linear", "Log"], horizontal=True)
 
+        # -------- SAFE AGGREGATION --------
         if agg == "count":
             chart_df = df.groupby(x_axis).size().reset_index(name="Count")
             y_plot = "Count"
+
         else:
             chart_df = df.groupby(x_axis)[y_axis].agg(agg).reset_index()
-            y_plot = y_axis
+            new_col = f"{agg}_{y_axis}"
+            chart_df.rename(columns={y_axis: new_col}, inplace=True)
+            y_plot = new_col
 
+        # -------- CHART TYPES --------
         if chart_type == "Bar":
             fig = px.bar(chart_df, x=x_axis, y=y_plot)
 
@@ -163,13 +173,13 @@ with tab2:
 
 # ---------------- AI CHAT ----------------
 with tab3:
-    st.subheader("🤖 AI Assistant (Smart Analysis)")
+    st.subheader("🤖 AI Assistant")
 
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
     with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input("Ask about tasks, owners, risks, delays...")
+        user_input = st.text_input("Ask about tasks, owners, risks...")
         submitted = st.form_submit_button("Ask")
 
     if submitted:
